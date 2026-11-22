@@ -1,8 +1,10 @@
 // Офлайн-помощник «Табеля» (Android).
 // Свои файлы — «сначала сеть»: с интернетом всегда свежая версия, без интернета — последняя сохранённая.
 // Чужие файлы (шрифты, библиотека Excel, распознавание текста) — «сначала сохранённое»: после первого
-// использования работают без сети. Смены и настройки здесь не хранятся — только файлы приложения.
-const CACHE = 'tabel-v22-1';
+// использования работают без сети. Сохраняются только удачные ответы (ошибка сайта в кэш не попадает). Смены и настройки здесь не хранятся — только файлы приложения.
+// Имена всех кэшей «Табеля» начинаются с tabel- : на этом же сайте живёт iOS-версия, её кэши не трогаем.
+const PREFIX = 'tabel-';
+const CACHE = PREFIX + 'v22-2';
 const CORE = ['./', './index.html', './manifest.webmanifest', './icon.png', './icon-192.png', './icon-512.png', './icon-maskable-512.png'];
 
 self.addEventListener('install', e => {
@@ -11,7 +13,7 @@ self.addEventListener('install', e => {
 
 self.addEventListener('activate', e => {
   e.waitUntil(
-    caches.keys().then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k))))
+    caches.keys().then(keys => Promise.all(keys.filter(k => k.startsWith(PREFIX) && k !== CACHE).map(k => caches.delete(k))))
       .then(() => self.clients.claim())
   );
 });
@@ -21,12 +23,17 @@ self.addEventListener('fetch', e => {
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) {
-    // чужие файлы: сохранённая копия, иначе сеть (и сохраняем на будущее)
+    // чужие файлы: сохранённая копия, иначе сеть (и сохраняем на будущее).
+    // Запрашиваем в режиме cors, чтобы видеть код ответа: «непрозрачный» ответ мог оказаться ошибкой
+    // и остался бы в кэше до следующей версии. Все наши CDN (jsdelivr, cdnjs, Google Fonts) отдают cors.
     e.respondWith(
-      caches.match(req).then(hit => hit || fetch(req).then(res => {
-        if (res && (res.ok || res.type === 'opaque')) { const copy = res.clone(); caches.open(CACHE).then(c => c.put(req, copy)); }
-        return res;
-      }))
+      caches.match(req).then(hit => {
+        if (hit) return hit;
+        return fetch(new Request(req.url, { mode: 'cors', credentials: 'omit' })).then(res => {
+          if (res.ok) { const copy = res.clone(); caches.open(CACHE).then(c => c.put(req, copy)); }
+          return res;
+        }, () => fetch(req)); // cors не вышел — отдаём как раньше, но без сохранения
+      })
     );
     return;
   }
